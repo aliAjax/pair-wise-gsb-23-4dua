@@ -1,160 +1,122 @@
+import { useMemo, useState } from "react";
 import "./styles.css";
+import { AppStateProvider, useAppState } from "./app/useAppState";
+import { SamplingPage } from "./pages/SamplingPage";
+import { ExceptionsPage } from "./pages/ExceptionsPage";
+import { ReleasesPage } from "./pages/ReleasesPage";
+import { LogsPage } from "./pages/LogsPage";
+import { Stat } from "./pages/components";
+import { STORAGE_KEY } from "./infra/storage";
 
-const project = {
-  "id": "hxwl-09",
-  "port": 5109,
-  "title": "半导体洁净室巡检",
-  "subtitle": "洁净等级阈值、粒子计数与异常处理看板",
-  "stack": "React + Vite + TypeScript + CSS",
-  "theme": [
-    "#0f766e",
-    "#2563eb",
-    "#e11d48"
-  ],
-  "domain": "洁净室巡检",
-  "users": [
-    "巡检员",
-    "厂务工程师",
-    "班组长"
-  ],
-  "metrics": [
-    "粒子异常",
-    "压差异常",
-    "温湿度偏移",
-    "待处理"
-  ],
-  "filters": [
-    "ISO 5",
-    "ISO 6",
-    "ISO 7",
-    "黄光区"
-  ],
-  "fields": [
-    "房间编号",
-    "洁净等级",
-    "粒子计数",
-    "温湿度",
-    "压差",
-    "设备状态",
-    "处理备注"
-  ],
-  "records": [
-    [
-      "CR-1201",
-      "ISO 5",
-      "异常",
-      "0.5um粒子超限，已通知厂务"
-    ],
-    [
-      "CR-2107",
-      "ISO 6",
-      "稳定",
-      "压差15Pa，温湿度正常"
-    ],
-    [
-      "Y-0302",
-      "黄光区",
-      "关注",
-      "湿度接近上限"
-    ]
-  ]
-};
+type Tab = "sampling" | "exceptions" | "releases" | "logs";
 
-const statusColors = ["status-ok", "status-watch", "status-danger"];
+const TABS: { key: Tab; label: string }[] = [
+  { key: "sampling", label: "采样与房间" },
+  { key: "exceptions", label: "异常单" },
+  { key: "releases", label: "放行与版本" },
+  { key: "logs", label: "采样记录" },
+];
 
-function MetricCard({ label, value, index }: { label: string; value: string; index: number }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <i className={statusColors[index % statusColors.length]} />
-    </article>
-  );
-}
+function Dashboard() {
+  const { state, resetToSeed, clearAll } = useAppState();
+  const [tab, setTab] = useState<Tab>("sampling");
+  const [prefillRoom, setPrefillRoom] = useState<string | null>(null);
 
-function App() {
-  const values = project.metrics.map((metric: string, index: number) => {
-    const base = [84, 12, 31, 7][index % 4];
-    return String(base + index * 3);
-  });
+  const metrics = useMemo(() => {
+    const active = new Set(
+      [...Object.values(state.rooms)].filter((r) => r.status === "active").map((r) => r.roomId)
+    ).size;
+    const decommissioned = Object.values(state.rooms).filter((r) => r.status === "decommissioned")
+      .length;
+    const ready = Object.values(state.rooms).filter(
+      (r) => r.status === "decommissioned" && r.consecutivePasses >= 2
+    ).length;
+    const openExceptions = state.exceptions.filter((e) => e.open).length;
+    const versions = state.releases.reduce((sum, r) => sum + r.versions.length, 0);
+    return {
+      active,
+      decommissioned,
+      ready,
+      openExceptions,
+      releases: state.releases.length,
+      versions,
+      samples: state.samples.length,
+    };
+  }, [state]);
+
+  const jumpToSampling = (roomId: string) => {
+    setPrefillRoom(roomId);
+    setTab("sampling");
+  };
 
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">{project.id} · port {project.port}</p>
-          <h1>{project.title}</h1>
-          <p className="subtitle">{project.subtitle}</p>
+          <p className="eyebrow">hxwl-09 · 粒子采样与恢复放行台</p>
+          <h1>半导体洁净室粒子采样与恢复放行</h1>
+          <p className="subtitle">
+            采样单登记 · 校准/粒径/计数三类异常判定 · 房间停用与换班复测 · 连续两次合格放行冻结 ·
+            更正留痕生成新版本，刷新后本地一致
+          </p>
         </div>
         <div className="stack-card">
-          <span>技术栈</span>
-          <strong>{project.stack}</strong>
+          <span>架构（不加依赖）</span>
+          <strong>资料 reference · 判定 rules/store · 本地存储 infra/storage · 页面 pages</strong>
+          <span>React + Vite + TypeScript + CSS</span>
         </div>
       </section>
 
       <section className="metrics-grid">
-        {project.metrics.map((metric: string, index: number) => (
-          <MetricCard key={metric} label={metric} value={values[index]} index={index} />
+        <Stat label="在用房间" value={metrics.active} />
+        <Stat label="停用房间（待复测/放行）" value={metrics.decommissioned} />
+        <Stat label="未关闭异常单" value={metrics.openExceptions} />
+        <Stat
+          label="放行单 / 版本数"
+          value={`${metrics.releases} / ${metrics.versions}`}
+        />
+      </section>
+
+      <section className="metrics-grid subtle">
+        <Stat label="累计采样单" value={metrics.samples} />
+        <Stat label="已达连续 2 次合格 · 可放行" value={metrics.ready} />
+        <Stat label="本地存储键" value={<code className="storage-key">{STORAGE_KEY}</code>} />
+        <article className="metric-card storage-actions">
+          <span>本地数据</span>
+          <div className="storage-buttons">
+            <button type="button" onClick={resetToSeed}>重置为演示数据</button>
+            <button type="button" className="danger-outline" onClick={clearAll}>清空业务数据</button>
+          </div>
+        </article>
+      </section>
+
+      <nav className="tabs" aria-label="功能页签">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={tab === t.key ? "active" : ""}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
         ))}
-      </section>
+      </nav>
 
-      <section className="workspace">
-        <aside className="panel narrow">
-          <h2>角色</h2>
-          <div className="chips">
-            {project.users.map((user: string) => (
-              <span key={user}>{user}</span>
-            ))}
-          </div>
-          <h2>筛选</h2>
-          <div className="chips muted">
-            {project.filters.map((filter: string) => (
-              <button key={filter}>{filter}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel">
-          <div className="section-heading">
-            <div>
-              <p>{project.domain}</p>
-              <h2>记录字段</h2>
-            </div>
-            <button className="primary-action">新增记录</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="records panel">
-        <div className="section-heading">
-          <div>
-            <p>示例数据</p>
-            <h2>近期记录</h2>
-          </div>
-          <button>导出摘要</button>
-        </div>
-        <div className="record-list">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")} className="record-card">
-              <div className="record-index">{String(index + 1).padStart(2, "0")}</div>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      {tab === "sampling" ? (
+        <SamplingPage prefillRoom={prefillRoom} onConsumePrefill={() => setPrefillRoom(null)} />
+      ) : null}
+      {tab === "exceptions" ? <ExceptionsPage onJumpRoom={jumpToSampling} /> : null}
+      {tab === "releases" ? <ReleasesPage /> : null}
+      {tab === "logs" ? <LogsPage /> : null}
     </main>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AppStateProvider>
+      <Dashboard />
+    </AppStateProvider>
+  );
+}
